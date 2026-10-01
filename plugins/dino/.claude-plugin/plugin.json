@@ -1,0 +1,12 @@
+{
+  "name": "dino",
+  "version": "0.2.0",
+  "description": "Chrome's offline T-Rex runner in a pane: /dino, then space to jump and s to duck",
+  "author": {
+    "name": "Barış Demirhan",
+    "url": "https://github.com/barisdemirhan"
+  },
+  "repository": "https://github.com/barisdemirhan/claude-dino",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
