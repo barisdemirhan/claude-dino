@@ -15,6 +15,10 @@ const STATS = 'stats'
 const SETTINGS = 'settings'
 const ROWS = 16
 const MINI_ROWS = 4
+// Cells kept clear after the best score: the hint line draws marks its text
+// does not count, and a tail that overruns the row is cut.
+const HINT_MARGIN = 6
+const MIN_HINT_GAP = 2
 const JUMP_KEYS = [' ', 'w', 'k']
 const DUCK_KEYS = ['s', 'j']
 const PAUSE_KEYS = ['p']
@@ -352,18 +356,23 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The best score among the mode labels at the right of the prompt footer,
-  // where it shows with the pane closed and takes no row of its own.
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+  // The best score at the right end of the hint line under the prompt, where
+  // it shows with the pane closed and takes no row of its own. The hint's text
+  // is the engine's to draw: this only pads a tail out to the row's end.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const hi = await read($, best)
 
     if (hi === 0) {
       return next(e)
     }
 
-    const modes = [...e.props.modes, `🦖 HI ${digits(hi)}`]
+    const label = `🦖 HI ${digits(hi)}`
+    const before = `${e.props.hint}${e.props.tail ?? ''}`
+    const room = (e.viewport?.columns ?? 0) - before.length - label.length
+    const gap = ' '.repeat(Math.max(MIN_HINT_GAP, room - HINT_MARGIN))
+    const tail = `${e.props.tail ?? ''}${gap}${label}`
 
-    return next({ ...e, props: { ...e.props, modes } })
+    return next({ ...e, props: { ...e.props, tail } })
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {

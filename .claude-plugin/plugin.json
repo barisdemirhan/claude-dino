@@ -1,6 +1,6 @@
 {
   "name": "dino",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A T-Rex runner in a pane, inspired by Chrome's offline game: /dino, then space to jump, s to duck and p to pause while Claude works",
   "author": {
     "name": "Barış Demirhan",

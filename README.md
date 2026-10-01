@@ -25,7 +25,7 @@ The same two steps work from inside a session with `/plugin marketplace add bari
 | `esc` | Give the keys back to the prompt |
 | `ctrl+x` `tab` | Give the keys back to the game |
 
-Birds show up from 150 points, the run speeds up as it goes, and night falls every 700 points. Every 100 points the score blinks. Your best score is kept between sessions and shows at the right of the prompt footer.
+Birds show up from 150 points, the run speeds up as it goes, and night falls every 700 points. Every 100 points the score blinks. Your best score is kept between sessions and shows at the right end of the hint line under the prompt.
 
 | Command | What it does |
 | --- | --- |
@@ -61,7 +61,7 @@ Its hooks, all in `hooks/register.tsx`:
 
 - `session.start` registers the `/dino` command and loads your settings and best score, then passes the event on unchanged.
 - `command.run` answers only the `/dino` command. Other commands never reach it.
-- `ui.render` draws only the mod's own pane, and the mini band while it is on and Claude is working. It also adds your best score to the mode labels of the prompt footer, leaving the labels already there as they are.
+- `ui.render` draws only the mod's own pane, and the mini band while it is on and Claude is working. It also adds your best score after the hint line under the prompt, leaving the hint itself as it is.
 - `ui.message` acts only on what the mod's own game posts: it counts finished runs, keeps the best score and plays the sounds. Any other message is passed on untouched.
 - `ui.close` notes that the mod's own pane closed, and passes every close on.
 - `tool.call` counts Claude's calls while a run is on, as described above, and passes each call and its result on untouched.
