@@ -80,6 +80,8 @@ It makes no network request unless you use the global top. Then it talks to one 
 
 The server keeps your name, your id, a hash of the secret and those runs. To slow a flood it also keeps a salted hash of the address a write came from, which later writes clear out once it is an hour old. `/dino leave` deletes your name and your runs.
 
+The same as a privacy policy: [PRIVACY.md](PRIVACY.md).
+
 While a run is on, it reads two things of each tool call Claude makes: the tool's name, to show it in the game, and whether the call failed. It reads nothing of the call's arguments or output, and keeps neither fact past the session.
 
 It saves four things in the plugin's own Claude Code store: your best score, how many runs and points you have in all, your two settings (sound and mini) and, once you join the global top, your name, id and secret there.
