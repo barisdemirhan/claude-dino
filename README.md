@@ -28,7 +28,7 @@ Birds show up from 150 points, the run speeds up as it goes, and night falls eve
 
 ## Requirements
 
-- A Claude Code build with mod support (plugins that ship a hooks module). Built and tested on 2.1.287.
+- A Claude Code build with mod support (plugins that ship a hooks module). Built and tested on 2.1.287. Mods sit behind a rollout switch, so if `/dino` does not show up after installing, the switch may still be off for you.
 - The terminal or the desktop app. Other surfaces show a notice instead of the game.
 - A pane at least 30 columns wide and 8 rows tall.
 
