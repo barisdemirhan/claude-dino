@@ -7,6 +7,7 @@
     "url": "https://github.com/barisdemirhan"
   },
   "repository": "https://github.com/barisdemirhan/claude-dino",
+  "privacyPolicyUrl": "https://github.com/barisdemirhan/claude-dino/blob/main/PRIVACY.md",
   "license": "MIT",
   "types": "./types/index.d.ts"
 }
