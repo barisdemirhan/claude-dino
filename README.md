@@ -1,6 +1,6 @@
 # claude-dino
 
-Chrome's offline T-Rex runner, playable in a pane inside [Claude Code](https://claude.com/claude-code).
+A T-Rex runner you can play in a pane inside [Claude Code](https://claude.com/claude-code), inspired by Chrome's offline game.
 
 Type `/dino`, press space, and jump the cacti while Claude works.
 
@@ -32,13 +32,17 @@ Birds show up from 150 points, the run speeds up as it goes, and night falls eve
 - The terminal or the desktop app. Other surfaces show a notice instead of the game.
 - A pane at least 30 columns wide and 8 rows tall.
 
+## What it does on your machine
+
+The mod registers one slash command, `/dino`, and draws one pane. It makes no network requests, reads no files, runs no processes, and never touches your prompts or tool calls. The only thing it saves is your best score, in the plugin's own Claude Code store.
+
 ## Develop
 
 ```sh
 git clone https://github.com/barisdemirhan/claude-dino
-claude plugin validate claude-dino/plugins/dino
-claude plugin test claude-dino/plugins/dino
-claude --plugin-dir claude-dino/plugins/dino
+claude plugin validate claude-dino
+claude plugin test claude-dino
+claude --plugin-dir claude-dino
 ```
 
 The mod is two files: `hooks/register.tsx` registers the `/dino` command and draws the pane, `hooks/dino.tsx` is the game itself.

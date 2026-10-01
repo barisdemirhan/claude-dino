@@ -1,15 +1,15 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-dino",
-  "description": "Chrome's offline T-Rex runner as a Claude Code mod",
+  "description": "A T-Rex runner for Claude Code, inspired by Chrome's offline game",
   "owner": {
     "name": "Barış Demirhan"
   },
   "plugins": [
     {
       "name": "dino",
-      "description": "Chrome's offline T-Rex runner in a pane: /dino, then space to jump and s to duck",
-      "source": "./plugins/dino",
+      "description": "A T-Rex runner in a pane, inspired by Chrome's offline game: /dino, then space to jump and s to duck",
+      "source": "./",
       "category": "fun"
     }
   ]
