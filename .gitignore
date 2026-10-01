@@ -1,3 +1,8 @@
 .DS_Store
 # Written by the Claude Code engine when the mod loads from a plugin folder
 .claude-plugin/types/
+# The leaderboard Worker's local state, its secrets and its generated types
+worker/.wrangler/
+worker/.dev.vars
+worker/.admin-token
+worker/worker-configuration.d.ts

@@ -1,0 +1,9 @@
+name = "claude-dino-board"
+main = "index.ts"
+compatibility_date = "2025-12-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "claude-dino-board"
+database_id = "2f8c170e-ff1a-46a4-9494-4a855621ae7c"
+migrations_dir = "migrations"

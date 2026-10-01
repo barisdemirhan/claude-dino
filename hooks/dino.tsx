@@ -1,401 +1,71 @@
 import type { ClientModule, ClientSurface } from 'claude-code'
 
+import {
+  CLOUD,
+  DINO_X,
+  JUMP,
+  MAX_COLUMNS,
+  MIN_COLUMNS,
+  RESTART_TICKS,
+  TICK_MS,
+  dinoSprite,
+  ducked,
+  fresh,
+  jumped,
+  obstacleSprite,
+  paused,
+  peeked,
+  queued,
+  scoreOf,
+  step,
+  toggled,
+} from './sim'
+import type { Game, Sprite } from './sim'
+
+type Row = { name: string; score: number }
 type Props = {
   hi: number
   jumps: number
   ducks: number
   pauses: number
+  tops: number
   tools: number
   fails: number
   tool: string
   alerts: number
   alert: 'done' | 'ask'
-}
-type Sprite = readonly string[]
-type Obstacle = {
-  x: number
-  y: number
-  kind: 'cactus' | 'bird' | 'crate'
-  shape: number
-}
-type Cloud = { x: number; y: number }
-// The counts the props carry that a game has already acted on.
-type Seen = Pick<
-  Props,
-  'jumps' | 'ducks' | 'pauses' | 'tools' | 'fails' | 'alerts'
->
-type Game = Seen & {
-  phase: 'ready' | 'run' | 'paused' | 'over'
-  // Why the run is paused: the person's key, or Claude asking for them.
-  note: 'key' | 'done' | 'ask'
-  ticks: number
-  y: number
-  vy: number
-  duck: number
-  speed: number
-  dist: number
-  obstacles: Obstacle[]
-  gap: number
-  // Pixels run since the last obstacle came in.
-  since: number
-  // Obstacles Claude's tool calls queued: a crate a call, a bird a failure.
-  crates: number
-  birds: number
-  // The tool behind the latest queued obstacle, and the ticks its name shows.
-  label: string
-  labelTicks: number
-  // The round score the tally blinks, and the ticks it still blinks for.
-  milestone: number
-  flash: number
-  clouds: Cloud[]
-  seed: number
-  hi: number
+  // The person on the global top: no name until they join, rank 0 until a
+  // run of theirs counts. isAsked while the field below takes a name.
+  name: string
+  rank: number
+  isAsked: boolean
+  // The board as last fetched, and whether it is being asked for or silent.
+  board: 'idle' | 'asking' | 'ready' | 'silent'
+  top: Row[]
+  players: number
 }
 
-// Cells across are pixels across; every text row holds two pixel rows (▀ ▄ █),
-// so a pixel is about square. Heights count pixels up from the ground.
-const TICK_MS = 40
-const DT = TICK_MS / 1000
-const GRAVITY = 354
-const JUMP = 110
-const DROP = -220
-const START_SPEED = 38
-const MAX_SPEED = 90
-const ACCELERATION = 1.2
-const DINO_X = 3
 const GROUND = 2
-const DUCK_TICKS = 12
-const RESTART_TICKS = 12
-const MAX_COLUMNS = 160
-const MIN_COLUMNS = 30
 const MIN_ROWS = 8
-const PIXELS_PER_POINT = 4
 const NIGHT_EVERY = 700
 const NIGHT_LASTS = 250
-const BIRDS_FROM = 150
-const TRIPLES_FROM = 55
-// The closest two obstacles come, as a share of the pixels run in a second.
-const MIN_GAP = 0.9
-const MAX_QUEUED = 3
 const LABEL_TICKS = 40
-const MILESTONE = 100
-const FLASH_TICKS = 24
 const JUMP_KEYS = [' ', 'space', 'up', 'return', 'w', 'k']
 const DUCK_KEYS = ['down', 's', 'j']
 const PAUSE_KEYS = ['p']
-
-const BODY: Sprite = [
-  '       ######',
-  '      ## ####',
-  '      #######',
-  '      ####   ',
-  '      ###### ',
-  '#    ####    ',
-  '##  ######   ',
-  '######## #   ',
-  ' #######     ',
-  '  #####      ',
-]
-const STAND: Sprite = [...BODY, '   #  #      ', '   ## ##     ']
-const RUN_A: Sprite = [...BODY, '   #  ##     ', '   ##        ']
-const RUN_B: Sprite = [...BODY, '   ## #      ', '      ##     ']
-const LOW: Sprite = [
-  '#          ######',
-  '##  ##### ## ####',
-  '#################',
-  ' ############    ',
-  '  ######### #####',
-]
-const DUCK_A: Sprite = [...LOW, '   #  ##         ', '   ##            ']
-const DUCK_B: Sprite = [...LOW, '   ## #          ', '      ##         ']
-
-const SMALL: Sprite = [
-  '  #  ',
-  '# #  ',
-  '# # #',
-  '### #',
-  '  ###',
-  '  #  ',
-  '  #  ',
-]
-const BIG: Sprite = [
-  '  ##   ',
-  '  ##   ',
-  '# ##   ',
-  '# ## # ',
-  '# ## # ',
-  '#### # ',
-  '  #### ',
-  '  ##   ',
-  '  ##   ',
-  '  ##   ',
-]
-const BIRD_UP: Sprite = [
-  '    #      ',
-  '  # ##     ',
-  ' ## ###    ',
-  '###########',
-  '    ###### ',
-  '           ',
-]
-const BIRD_DOWN: Sprite = [
-  '           ',
-  '  #        ',
-  ' ##        ',
-  '###########',
-  '    ###### ',
-  '    ##     ',
-]
-const CRATE: Sprite = ['#####', '#   #', '# # #', '#   #', '#####']
-const CLOUD: Sprite = ['    ####    ', '  ##    ### ', '############']
-
-const widthOf = (sprite: Sprite): number =>
-  Math.max(...sprite.map(line => line.length))
-
-const beside = (...sprites: Sprite[]): Sprite => {
-  const height = Math.max(...sprites.map(sprite => sprite.length))
-
-  return Array.from({ length: height }, (_, row) =>
-    sprites
-      .map(sprite =>
-        (sprite[row - (height - sprite.length)] ?? '').padEnd(widthOf(sprite)),
-      )
-      .join(' '),
-  )
-}
-
-// The last one is three cacti wide: only cleared once the run is fast enough.
-const CACTI: readonly Sprite[] = [
-  SMALL,
-  BIG,
-  beside(SMALL, SMALL),
-  beside(BIG, SMALL),
-  beside(SMALL, BIG, SMALL),
-]
-// Over a jump, under a jump or a duck, over a standing dino.
-const BIRD_HEIGHTS = [1, 7, 13] as const
+const TOP_KEYS = ['t']
+const TOP_ROWS = 10
+const BOARD_NOTES = {
+  idle: 'asking the leaderboard…',
+  asking: 'asking the leaderboard…',
+  ready: 'nobody is on it yet: finish a run and take a name',
+  silent: 'the leaderboard did not answer',
+} as const
 const PAUSE_NOTES = {
   key: ' space or p to run on ',
   done: ' Claude is done · space to run on ',
   ask: ' Claude needs you · space to run on ',
 } as const
-
-const scoreOf = (game: Game): number => Math.floor(game.dist / PIXELS_PER_POINT)
-
-const fresh = (hi: number, seed: number, seen: Seen): Game => ({
-  phase: 'ready',
-  note: 'key',
-  ticks: 0,
-  y: 0,
-  vy: 0,
-  duck: 0,
-  speed: START_SPEED,
-  dist: 0,
-  obstacles: [],
-  gap: 50,
-  since: 0,
-  crates: 0,
-  birds: 0,
-  label: '',
-  labelTicks: 0,
-  milestone: 0,
-  flash: 0,
-  clouds: [{ x: 34, y: 20 }],
-  seed,
-  hi,
-  jumps: seen.jumps,
-  ducks: seen.ducks,
-  pauses: seen.pauses,
-  tools: seen.tools,
-  fails: seen.fails,
-  alerts: seen.alerts,
-})
-
-/** Advances the game's seed and answers a number in [0, 1). */
-const roll = (game: Game): number => {
-  game.seed = (Math.imul(game.seed, 1664525) + 1013904223) >>> 0
-
-  return game.seed / 2 ** 32
-}
-
-const dinoSprite = (game: Game): Sprite => {
-  if (game.phase !== 'run' || game.y > 0) {
-    return STAND
-  }
-
-  const isFirstStride = Math.floor(game.ticks / 3) % 2 === 0
-
-  if (game.duck > 0) {
-    return isFirstStride ? DUCK_A : DUCK_B
-  }
-
-  return isFirstStride ? RUN_A : RUN_B
-}
-
-const obstacleSprite = (obstacle: Obstacle, ticks: number): Sprite => {
-  if (obstacle.kind === 'cactus') {
-    return CACTI[obstacle.shape] ?? SMALL
-  }
-
-  if (obstacle.kind === 'crate') {
-    return CRATE
-  }
-
-  return Math.floor(ticks / 6) % 2 === 0 ? BIRD_UP : BIRD_DOWN
-}
-
-const isSolid = (sprite: Sprite, x: number, y: number): boolean =>
-  sprite[sprite.length - 1 - y]?.[x] === '#'
-
-const isHit = (game: Game): boolean => {
-  const dino = dinoSprite(game)
-  const dinoY = Math.round(game.y)
-
-  return game.obstacles.some(obstacle => {
-    const sprite = obstacleSprite(obstacle, game.ticks)
-    const left = Math.round(obstacle.x) - DINO_X
-    const bottom = obstacle.y - dinoY
-
-    return dino.some((line, row) =>
-      [...line].some(
-        (pixel, column) =>
-          pixel === '#' &&
-          isSolid(sprite, column - left, dino.length - 1 - row - bottom),
-      ),
-    )
-  })
-}
-
-const spawn = (game: Game, columns: number): void => {
-  const x = Math.max(columns, MIN_COLUMNS)
-  const isBird = scoreOf(game) >= BIRDS_FROM && roll(game) < 0.25
-
-  if (game.birds > 0) {
-    // A failed call's bird flies low: over a jump, or under a jump or a duck.
-    const y = BIRD_HEIGHTS[Math.floor(roll(game) * 2)] ?? 1
-    game.obstacles.push({ x, y, kind: 'bird', shape: 0 })
-    game.birds -= 1
-  } else if (game.crates > 0) {
-    game.obstacles.push({ x, y: 0, kind: 'crate', shape: 0 })
-    game.crates -= 1
-  } else if (isBird) {
-    const y = BIRD_HEIGHTS[Math.floor(roll(game) * BIRD_HEIGHTS.length)] ?? 1
-    game.obstacles.push({ x, y, kind: 'bird', shape: 0 })
-  } else {
-    const shapes = game.speed >= TRIPLES_FROM ? CACTI.length : CACTI.length - 1
-    game.obstacles.push({
-      x,
-      y: 0,
-      kind: 'cactus',
-      shape: Math.floor(roll(game) * shapes),
-    })
-  }
-
-  game.since = 0
-  game.gap = Math.round(game.speed * (MIN_GAP + roll(game) * 1.1))
-}
-
-const step = (previous: Game, columns: number): Game => {
-  const game: Game = { ...previous, ticks: previous.ticks + 1 }
-
-  if (game.phase !== 'run') {
-    return game
-  }
-
-  const isAirborne = game.y > 0 || game.vy > 0
-
-  if (isAirborne) {
-    game.y += game.vy * DT - 0.5 * GRAVITY * DT * DT
-    game.vy -= GRAVITY * DT
-
-    if (game.y <= 0) {
-      game.y = 0
-      game.vy = 0
-    }
-  }
-
-  const moved = game.speed * DT
-  game.duck = Math.max(0, game.duck - 1)
-  game.speed = Math.min(MAX_SPEED, game.speed + ACCELERATION * DT)
-  game.dist += moved
-  game.gap -= moved
-  game.since += moved
-  game.labelTicks = Math.max(0, game.labelTicks - 1)
-  game.flash = Math.max(0, game.flash - 1)
-
-  const score = scoreOf(game)
-  const isRound =
-    Math.floor(score / MILESTONE) > Math.floor(scoreOf(previous) / MILESTONE)
-
-  if (isRound) {
-    game.milestone = score - (score % MILESTONE)
-    game.flash = FLASH_TICKS
-  }
-
-  game.obstacles = previous.obstacles
-    .map(obstacle => ({ ...obstacle, x: obstacle.x - moved }))
-    .filter(obstacle => obstacle.x > -24)
-  game.clouds = previous.clouds
-    .map(cloud => ({ ...cloud, x: cloud.x - moved / 5 }))
-    .filter(cloud => cloud.x > -widthOf(CLOUD))
-
-  const isQueued =
-    game.crates + game.birds > 0 && game.since >= game.speed * MIN_GAP
-
-  if (game.gap <= 0 || isQueued) {
-    spawn(game, columns)
-  }
-
-  if (game.clouds.length < 3 && roll(game) < 0.008) {
-    game.clouds.push({ x: columns, y: 16 + Math.floor(roll(game) * 8) })
-  }
-
-  if (isHit(game)) {
-    game.phase = 'over'
-    game.ticks = 0
-    game.hi = Math.max(game.hi, scoreOf(game))
-  }
-
-  return game
-}
-
-const paused = (game: Game, note: Game['note']): Game =>
-  game.phase === 'run' ? { ...game, phase: 'paused', note } : game
-
-const toggled = (game: Game): Game =>
-  game.phase === 'paused' ? { ...game, phase: 'run' } : paused(game, 'key')
-
-const jumped = (game: Game): Game => {
-  const isWaiting =
-    game.phase === 'ready' ||
-    (game.phase === 'over' && game.ticks >= RESTART_TICKS)
-
-  if (isWaiting) {
-    return { ...fresh(game.hi, game.seed, game), phase: 'run', vy: JUMP }
-  }
-
-  if (game.phase === 'paused') {
-    return { ...game, phase: 'run' }
-  }
-
-  if (game.phase === 'run' && game.y === 0) {
-    return { ...game, vy: JUMP, duck: 0 }
-  }
-
-  return game
-}
-
-const ducked = (game: Game): Game => {
-  if (game.phase !== 'run') {
-    return game
-  }
-
-  return {
-    ...game,
-    duck: DUCK_TICKS,
-    vy: game.y > 0 ? Math.min(game.vy, DROP) : game.vy,
-  }
-}
 
 /** The run with the obstacles Claude's new tool calls and failures queue. */
 const fed = (game: Game, props: Props): Game => {
@@ -406,9 +76,7 @@ const fed = (game: Game, props: Props): Game => {
   }
 
   return {
-    ...seen,
-    crates: Math.min(MAX_QUEUED, game.crates + props.tools - game.tools),
-    birds: Math.min(MAX_QUEUED, game.birds + props.fails - game.fails),
+    ...queued(seen, props.tools - game.tools, props.fails - game.fails),
     label: props.tool,
     labelTicks: LABEL_TICKS,
   }
@@ -429,6 +97,7 @@ const caughtUp = (game: Game, props: Props): Game => {
       props.pauses !== game.pauses,
       now => toggled({ ...now, pauses: props.pauses }),
     ],
+    [props.tops !== game.tops, now => peeked({ ...now, tops: props.tops })],
     [
       props.jumps !== game.jumps,
       now => jumped({ ...now, jumps: props.jumps }),
@@ -452,6 +121,11 @@ const eventOf = (before: Game, after: Game): string | undefined => {
     return after.phase === 'ready' ? undefined : after.phase
   }
 
+  if (after.isTop && !before.isTop) {
+    // The hooks module fetches the board when it is asked for, not before.
+    return 'top'
+  }
+
   if (after.phase !== 'run') {
     return undefined
   }
@@ -471,7 +145,15 @@ const settle = (
   const event = eventOf(before, after)
   surface.setState(after)
 
-  if (event !== undefined) {
+  if (event === 'over') {
+    // A lost run goes with what plays it again: the leaderboard takes those.
+    surface.post({
+      event,
+      score: scoreOf(after),
+      seed: after.start,
+      log: after.log,
+    })
+  } else if (event !== undefined) {
     surface.post({ event, score: scoreOf(after) })
   }
 }
@@ -509,6 +191,8 @@ const start = (surface: ClientSurface<Game>, props: Props): Game => {
       act(surface, ducked)
     } else if (PAUSE_KEYS.includes(event.key)) {
       act(surface, toggled)
+    } else if (TOP_KEYS.includes(event.key)) {
+      act(surface, peeked)
     }
   })
   surface.onPointer(event => {
@@ -576,6 +260,58 @@ const centered = (line: string, text: string): string =>
 
 const digits = (score: number): string => String(score).padStart(5, '0')
 
+/** The global top as text rows, in place of the field. */
+const boardLines = (props: Props, columns: number, rows: number): string[] => {
+  const lines = Array.from({ length: rows }, () => ' '.repeat(columns))
+  const put = (row: number, text: string): void => {
+    lines[row] = stamp(lines[row] ?? '', text, 2)
+  }
+  const shown = props.top.slice(0, Math.min(TOP_ROWS, rows - 4))
+  const count = `${props.players} ${props.players === 1 ? 'player' : 'players'}`
+
+  put(0, `G L O B A L   T O P${shown.length > 0 ? ` · ${count}` : ''}`)
+
+  if (shown.length === 0) {
+    put(2, BOARD_NOTES[props.board])
+  }
+
+  shown.forEach(({ name, score }, at) => {
+    const mark = name === props.name ? '▸' : ' '
+    put(2 + at, `${mark}${String(at + 1).padStart(2)}  ${digits(score)}  ${name}`)
+  })
+
+  if (props.rank > shown.length) {
+    put(rows - 2, `▸ you are #${props.rank} · ${props.name}`)
+  }
+
+  put(rows - 1, 't closes · space runs')
+
+  return lines
+}
+
+/** What a lost run says in the middle of the field, top line first. */
+const overLines = (game: Game, props: Props): string[] => {
+  const score = scoreOf(game)
+  // A first run beats nothing: only a best that was there can be beaten.
+  const isBest = game.was > 0 && score > game.was
+  const standing =
+    props.rank > 0 ? `#${props.rank} on the global top` : 'on the global top'
+
+  return [
+    isBest ? ' N E W   B E S T ' : ' G A M E   O V E R ',
+    '',
+    ...(isBest
+      ? [` ${score - game.was} past your old best of ${digits(game.was)} `]
+      : []),
+    ...(props.name !== '' ? [` ${props.name} · ${standing} `] : []),
+    ...(props.name === '' && props.isAsked
+      ? [' a name below puts this run on the global top ']
+      : []),
+    '',
+    props.isAsked ? ' space runs again ' : ' space runs again · t shows the top ',
+  ]
+}
+
 const Dino: ClientModule<Props, Game> = (props, surface) => {
   const { Box, Text } = surface.elements
   const known = surface.state ?? start(surface, props)
@@ -590,6 +326,16 @@ const Dino: ClientModule<Props, Game> = (props, surface) => {
 
   if (columns < MIN_COLUMNS || rows < MIN_ROWS) {
     return <Text dimColor>Dino needs a little more room.</Text>
+  }
+
+  if (game.isTop && game.phase !== 'run') {
+    return (
+      <Box flexDirection="column">
+        {boardLines(props, columns, rows).map(line => (
+          <Text wrap="truncate-end">{line}</Text>
+        ))}
+      </Box>
+    )
   }
 
   const pixels = paint(game, columns, rows * 2)
@@ -625,12 +371,16 @@ const Dino: ClientModule<Props, Game> = (props, surface) => {
 
   if (game.phase === 'ready') {
     lines[middle] = centered(lines[middle] ?? '', ' PRESS SPACE TO PLAY ')
+    lines[middle + 2] = centered(lines[middle + 2] ?? '', ' t shows the global top ')
   } else if (game.phase === 'paused') {
     lines[middle] = centered(lines[middle] ?? '', ' P A U S E D ')
     lines[middle + 2] = centered(lines[middle + 2] ?? '', PAUSE_NOTES[game.note])
   } else if (game.phase === 'over') {
-    lines[middle] = centered(lines[middle] ?? '', ' G A M E   O V E R ')
-    lines[middle + 2] = centered(lines[middle + 2] ?? '', ' space to run again ')
+    overLines(game, props).forEach((text, at) => {
+      if (text !== '') {
+        lines[middle + at] = centered(lines[middle + at] ?? '', text)
+      }
+    })
   }
 
   const isNight = score >= NIGHT_EVERY && score % NIGHT_EVERY < NIGHT_LASTS

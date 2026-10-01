@@ -1,10 +1,29 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { DinoAlert, DinoInput, DinoSettings } from '../types'
+import type { DinoAlert, DinoBoard, DinoInput, DinoSettings } from '../types'
+import {
+  NOBODY,
+  enrolled,
+  nameText,
+  named,
+  placed,
+  playersOf,
+  posted,
+  ranked,
+  refusalOf,
+  rowsOf,
+  runBody,
+  sentText,
+  toPlayer,
+  topPath,
+  topText,
+  urlOf,
+} from './board'
+import type { Player, Run, Told } from './board'
 
 type Stats = { runs: number; points: number }
-type Post = { event: string; score: number }
+type Post = { event: string; score: number; seed: number; log: string }
 
 const PANE = 'dino'
 const GAME = 'game'
@@ -13,6 +32,7 @@ const MINI = 'mini'
 const HI = 'hi'
 const STATS = 'stats'
 const SETTINGS = 'settings'
+const PLAYER = 'player'
 const ROWS = 16
 const MINI_ROWS = 4
 // Cells kept clear after the best score: the hint line draws marks its text
@@ -22,6 +42,7 @@ const MIN_HINT_GAP = 2
 const JUMP_KEYS = [' ', 'w', 'k']
 const DUCK_KEYS = ['s', 'j']
 const PAUSE_KEYS = ['p']
+const TOP_KEYS = ['t']
 // What the game posts while a run is on; any other post ends or holds it.
 const RUNNING = ['start', 'resume', 'jump', 'point']
 const CLIPS: Readonly<Record<string, string>> = {
@@ -37,7 +58,7 @@ const ALERTS = {
 // The notices Claude Code sends when it waits on the person's answer.
 const WAITING = ['permission_prompt', 'elicitation_dialog']
 const USAGE =
-  'Usage: /dino [play], /dino stop, /dino mini [on|off], /dino sound [on|off] or /dino stats.'
+  'Usage: /dino [play], /dino stop, /dino mini [on|off], /dino sound [on|off], /dino stats, /dino top, /dino name [<name>|off] or /dino leave.'
 const PLAY_WORDS = ['', 'play']
 const STOP_WORDS = ['stop', 'stop-play']
 const SWITCH: Readonly<Record<string, boolean>> = { on: true, off: false }
@@ -46,6 +67,7 @@ const input = atom({ plugin: 'dino', key: 'input' } as const, {
   jumps: 0,
   ducks: 0,
   pauses: 0,
+  tops: 0,
   typed: 0,
 })
 const feed = atom({ plugin: 'dino', key: 'feed' } as const, {
@@ -62,6 +84,17 @@ const settings = atom({ plugin: 'dino', key: 'settings' } as const, {
   isMuted: false,
 })
 const best = atom({ plugin: 'dino', key: 'best' } as const, 0)
+// The lost run a name is being asked for, to put it on the global top: 0
+// while nothing is asked.
+const offer = atom({ plugin: 'dino', key: 'offer' } as const, { score: 0 })
+// The global top as last fetched for the game to show, and the person's
+// name and rank on it: no name until they join.
+const NO_BOARD: DinoBoard = { state: 'idle', top: [], players: 0 }
+const board = atom({ plugin: 'dino', key: 'board' } as const, NO_BOARD)
+const standing = atom({ plugin: 'dino', key: 'standing' } as const, {
+  name: '',
+  rank: 0,
+})
 
 const toScore = (value: unknown): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -92,8 +125,10 @@ const toPost = (value: unknown): Post =>
         event:
           'event' in value && typeof value.event === 'string' ? value.event : '',
         score: toScore('score' in value ? value.score : 0),
+        seed: toScore('seed' in value ? value.seed : 0),
+        log: 'log' in value && typeof value.log === 'string' ? value.log : '',
       }
-    : { event: '', score: 0 }
+    : { event: '', score: 0, seed: 0, log: '' }
 
 /**
  * The counts as kept, each a number: a value written before a reload stays
@@ -103,6 +138,7 @@ const toInput = (kept: Partial<DinoInput>): DinoInput => ({
   jumps: toScore(kept.jumps),
   ducks: toScore(kept.ducks),
   pauses: toScore(kept.pauses),
+  tops: toScore(kept.tops),
   typed: toScore(kept.typed),
 })
 
@@ -113,15 +149,18 @@ const keyed = (kept: DinoInput, key: string): DinoInput => {
     jumps: now.jumps + (JUMP_KEYS.includes(key) ? 1 : 0),
     ducks: now.ducks + (DUCK_KEYS.includes(key) ? 1 : 0),
     pauses: now.pauses + (PAUSE_KEYS.includes(key) ? 1 : 0),
+    tops: now.tops + (TOP_KEYS.includes(key) ? 1 : 0),
     typed: now.typed + 1,
   }
 }
 
 /** Everything the game module draws from, as its props. */
 const propsOf = async ($: EngineInterface) => {
-  const { jumps, ducks, pauses } = toInput(await read($, input))
+  const { jumps, ducks, pauses, tops } = toInput(await read($, input))
   const { tools, fails, tool } = await read($, feed)
   const { count, reason } = await read($, alert)
+  const { name, rank } = await read($, standing)
+  const { state, top, players } = await read($, board)
   const hi = toScore(await $.store.get(HI))
 
   return {
@@ -129,11 +168,18 @@ const propsOf = async ($: EngineInterface) => {
     jumps,
     ducks,
     pauses,
+    tops,
     tools,
     fails,
     tool,
     alerts: count,
     alert: reason,
+    name,
+    rank,
+    isAsked: (await read($, offer)).score > 0,
+    board: state,
+    top,
+    players,
   }
 }
 
@@ -147,6 +193,178 @@ const record = async ($: EngineInterface, score: number): Promise<void> => {
     points: stats.points + score,
   })
   await update($, best, () => hi)
+}
+
+const playerOf = async ($: EngineInterface): Promise<Player> =>
+  toPlayer(await $.store.get(PLAYER))
+
+/** Keeps the player, and hands the game their name and rank to show. */
+const filed = async ($: EngineInterface, player: Player): Promise<void> => {
+  await $.store.set(PLAYER, player)
+  await update($, standing, () => ({ name: player.name, rank: player.rank }))
+}
+
+/**
+ * Asks the leaderboard's server, and answers its status and what it said:
+ * status 0 when it could not be reached or said nothing a board would say.
+ */
+const asked = async (
+  $: EngineInterface,
+  path: string,
+  body?: Record<string, unknown>,
+): Promise<{ status: number; said: unknown }> => {
+  try {
+    const { status, text } = await $.http.fetch(
+      urlOf(path),
+      body === undefined ? undefined : posted(body),
+    )
+    const said: unknown = JSON.parse(text)
+
+    return { status, said }
+  } catch {
+    return { status: 0, said: undefined }
+  }
+}
+
+/**
+ * Takes `name` on the global top for this person, or changes the name they
+ * have there. The first time, it makes the id and the secret their runs go
+ * under, and keeps them once the server has taken the name.
+ */
+const joined = async ($: EngineInterface, name: string): Promise<Told> => {
+  const player = enrolled(await playerOf($))
+  const { status, said } = await asked($, '/players', {
+    id: player.id,
+    key: player.key,
+    name,
+  })
+
+  if (status !== 200) {
+    return { isDone: false, text: refusalOf(said) }
+  }
+
+  const taken = named(player, said)
+  await filed($, taken)
+
+  return {
+    isDone: true,
+    text: `You are on the global top as ${taken.name}. Your best runs go up from here on.`,
+  }
+}
+
+/** Sends a run for the server to play again and count. */
+const sent = async ($: EngineInterface, run: Run): Promise<Told> => {
+  const player = await playerOf($)
+  const { status, said } = await asked($, '/runs', runBody(player, run))
+
+  if (status !== 200) {
+    return { isDone: false, text: refusalOf(said) }
+  }
+
+  await filed($, ranked(player, run, said))
+
+  return { isDone: true, text: sentText(said) }
+}
+
+/** `/dino leave`: takes this person and their runs off the global top. */
+const leftText = async ($: EngineInterface): Promise<string> => {
+  const player = await playerOf($)
+
+  if (player.name === '') {
+    return 'You are not on the global top.'
+  }
+
+  const { status, said } = await asked($, '/leave', {
+    id: player.id,
+    key: player.key,
+  })
+
+  // A player the server no longer knows is as gone as one it just removed.
+  if (status !== 200 && status !== 403) {
+    return refusalOf(said)
+  }
+
+  await filed($, { ...NOBODY, isOff: true })
+
+  return 'You are off the global top, and your runs there are deleted.'
+}
+
+/** `/dino name off`: the game stops asking for a name after a lost run. */
+const declinedText = async ($: EngineInterface): Promise<string> => {
+  const player = await playerOf($)
+
+  if (player.name !== '') {
+    return `You are on the global top as ${player.name}. /dino leave takes you off it.`
+  }
+
+  await $.store.set(PLAYER, { ...player, isOff: true })
+
+  return 'Dino will not ask for a name again. /dino name <name> joins the global top.'
+}
+
+/**
+ * Fetches the global top for the game to show. What it showed before stays
+ * up while the server is asked, and after a silence.
+ */
+const boarded = async ($: EngineInterface): Promise<void> => {
+  await update($, board, (now): DinoBoard => ({ ...now, state: 'asking' }))
+  const player = await playerOf($)
+  const { status, said } = await asked($, topPath(player))
+  const top = rowsOf(said)
+
+  if (status !== 200 || top === undefined) {
+    await update($, board, (now): DinoBoard => ({ ...now, state: 'silent' }))
+
+    return
+  }
+
+  await update(
+    $,
+    board,
+    (): DinoBoard => ({ state: 'ready', top, players: playersOf(said) }),
+  )
+
+  if (player.name !== '') {
+    await filed($, placed(player, said))
+  }
+}
+
+/**
+ * What a lost run means for the global top. A player's run that beats the
+ * one they have there is sent; a run of somebody who is not on it, and has
+ * not said to be left alone, opens the offer of a name.
+ */
+const topped = async ($: EngineInterface, run: Run): Promise<void> => {
+  const player = await playerOf($)
+
+  if (player.name !== '') {
+    if (run.score > player.best) {
+      $.ui.toast((await sent($, run)).text)
+    }
+  } else if (!player.isOff) {
+    await update($, offer, () => ({ score: run.score }))
+  }
+}
+
+/**
+ * Joins the global top under `name` and sends `run`, the latest one, if it
+ * beats what the player has there. Answers whether the name was taken, and
+ * what to tell the person.
+ */
+const join = async (
+  $: EngineInterface,
+  name: string,
+  run: Run | undefined,
+): Promise<Told> => {
+  const told = await joined($, name)
+
+  if (!told.isDone || run === undefined) {
+    return told
+  }
+
+  return run.score > (await playerOf($)).best
+    ? { isDone: true, text: (await sent($, run)).text }
+    : told
 }
 
 const play = async ($: EngineInterface, event: string): Promise<void> => {
@@ -223,21 +441,68 @@ const alerted = async (
   $.ui.toast(ALERTS[reason])
 }
 
+/**
+ * A change of the keys field. While a name is asked for, the field takes
+ * the name, and only a space with nothing before it is still a move: the
+ * one that runs again.
+ */
+const typed = async ($: EngineInterface, value: string): Promise<void> => {
+  const isAsked = (await read($, offer)).score > 0
+
+  if (!isAsked) {
+    await update($, input, now => keyed(now, value.at(-1)?.toLowerCase() ?? ''))
+  } else if (value !== '' && value.trim() === '') {
+    await update($, input, now => keyed(now, ' '))
+  }
+}
+
+/**
+ * Enter in the keys field: a jump. While a name is asked for, the name
+ * joins the global top with the latest run, and enter alone shows the top.
+ */
+const entered = async (
+  $: EngineInterface,
+  value: string,
+  latest: Run | undefined,
+): Promise<void> => {
+  const name = value.trim()
+  const isAsked = (await read($, offer)).score > 0
+
+  if (!isAsked || name === '') {
+    await update($, input, now => keyed(now, isAsked ? 't' : ' '))
+
+    return
+  }
+
+  const told = await join($, name, latest)
+  $.ui.toast(told.text)
+
+  if (told.isDone) {
+    await update($, offer, () => ({ score: 0 }))
+    // A key that is no move: it only empties the field of the name.
+    await update($, input, now => keyed(now, ''))
+  }
+}
+
 export const register: Register = on => {
   // Whether a run is on, as the game last posted: Claude's work reaches the
   // game only then, and nothing else of this module looks at it.
   let isRunning = false
+  // The latest finished run, kept for a name that comes after it.
+  let latest: Run | undefined
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'dino',
       description: 'Play a T-Rex runner in a pane while Claude works',
-      argumentHint: '[play|stop|mini|sound|stats]',
+      argumentHint: '[play|stop|mini|sound|stats|top|name|leave]',
     })
     const saved = toSettings(await $.store.get(SETTINGS))
     const hi = toScore(await $.store.get(HI))
+    const { name, rank } = await playerOf($)
     await update($, settings, () => saved)
     await update($, best, () => hi)
+    await update($, standing, () => ({ name, rank }))
 
     return next(e)
   })
@@ -260,8 +525,39 @@ export const register: Register = on => {
       return { text: await soundText($, word) }
     }
 
+    if (verb === 'name' && word === 'off') {
+      await update($, offer, () => ({ score: 0 }))
+
+      return { text: await declinedText($) }
+    }
+
+    if (verb === 'name' && word !== '') {
+      // The name as typed: the words above are lowered to match commands.
+      const told = await join($, e.args.trim().split(/\s+/)[1] ?? '', latest)
+
+      if (told.isDone) {
+        await update($, offer, () => ({ score: 0 }))
+      }
+
+      return { text: told.text }
+    }
+
     if (word !== '') {
       return { text: USAGE }
+    }
+
+    if (verb === 'name') {
+      return { text: nameText(await playerOf($)) }
+    }
+
+    if (verb === 'top') {
+      const { status, said } = await asked($, topPath(await playerOf($)))
+
+      return { text: topText(status, said) }
+    }
+
+    if (verb === 'leave') {
+      return { text: await leftText($) }
     }
 
     if (verb === 'stats') {
@@ -302,7 +598,14 @@ export const register: Register = on => {
     isRunning = RUNNING.includes(post.event)
 
     if (post.event === 'over') {
+      latest = { seed: post.seed, log: post.log, score: post.score }
       await record($, post.score)
+      void topped($, latest)
+    } else if (post.event === 'top') {
+      void boarded($)
+    } else if (post.event === 'start' && (await read($, offer)).score > 0) {
+      // The person ran again instead of taking a name.
+      await update($, offer, () => ({ score: 0 }))
     }
 
     void play($, post.event)
@@ -407,7 +710,12 @@ export const register: Register = on => {
 
     const ui = $.ui.resolve(e)
     const { Box, Input, Text } = ui
-    const { typed } = toInput(await read($, input))
+    const { typed: keys } = toInput(await read($, input))
+    const { score: offered } = await read($, offer)
+    const isAsked = offered > 0
+    const hint = e.props.isFocused
+      ? 'space/w jump · s duck · p pause · t top · esc gives the keys back to the prompt'
+      : 'ctrl+x tab gives the game the keys · then space/w jump · s duck · p pause · t top'
 
     return (
       <Box flexDirection="column">
@@ -420,22 +728,26 @@ export const register: Register = on => {
         />
         {/* The field is the keyboard: every key typed into it is one move, and
             drawing a value other than the last one empties it again. */}
+        {/* After a lost run by somebody not on the global top, the same field
+            asks for a name: it keeps the focus, and a space still runs again. */}
         <Input
           key={KEYS}
-          label="keys"
-          placeholder="space jump · s duck · p pause"
-          submitLabel="jump"
-          value={typed % 2 === 0 ? '' : ' '}
-          autoFocus
-          onInput={value =>
-            update($, input, now => keyed(now, value.at(-1)?.toLowerCase() ?? ''))
+          label={isAsked ? 'name' : 'keys'}
+          placeholder={
+            isAsked
+              ? 'a name for the global top'
+              : 'space jump · s duck · p pause · t top'
           }
-          onSubmit={() => update($, input, now => keyed(now, ' '))}
+          submitLabel={isAsked ? 'join' : 'jump'}
+          value={keys % 2 === 0 ? '' : ' '}
+          autoFocus
+          onInput={value => typed($, value)}
+          onSubmit={value => entered($, value, latest)}
         />
         <Text dimColor>
-          {e.props.isFocused
-            ? 'space/w jump · s duck · p pause · esc gives the keys back to the prompt'
-            : 'ctrl+x tab gives the game the keys · then space/w jump · s duck · p pause'}
+          {isAsked
+            ? `enter sends this name and your ${digits(offered)} run to the global top · space runs again · enter alone shows the top`
+            : hint}
         </Text>
       </Box>
     )
