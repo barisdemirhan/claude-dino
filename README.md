@@ -34,6 +34,7 @@ Birds show up from 150 points, the run speeds up as it goes, and night falls eve
 | `/dino stop` | Closes the game |
 | `/dino mini` | Turns the mini dino on: a small one that plays itself above the prompt while Claude works, hopping the cacti and ducking the birds under the clouds. `/dino mini off` turns it off |
 | `/dino sound` | Turns the sounds off or on. `/dino sound on` and `/dino sound off` say which |
+| `/dino hi` | Takes your best score off the line under the prompt, or puts it back. `/dino hi on` and `/dino hi off` say which |
 | `/dino stats` | Your runs so far, your best and your average |
 | `/dino top` | The global top ten, and where you stand if you are on it |
 | `/dino name <name>` | Joins the global top under that name, or changes the name you have there. `/dino name` says whether you are on it, `/dino name off` stops the game asking |
@@ -84,7 +85,7 @@ The same as a privacy policy: [PRIVACY.md](PRIVACY.md).
 
 While a run is on, it reads two things of each tool call Claude makes: the tool's name, to show it in the game, and whether the call failed. It reads nothing of the call's arguments or output, and keeps neither fact past the session.
 
-It saves four things in the plugin's own Claude Code store: your best score, how many runs and points you have in all, your two settings (sound and mini) and, once you join the global top, your name, id and secret there.
+It saves four things in the plugin's own Claude Code store: your best score, how many runs and points you have in all, your three settings (sound, mini and whether your best score shows under the prompt) and, once you join the global top, your name, id and secret there.
 
 It plays three short sounds from its own `sounds/` folder, through Claude Code's player.
 

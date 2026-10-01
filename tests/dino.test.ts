@@ -189,6 +189,47 @@ test('/dino mini and /dino sound take on and off, and say what they take', async
   expect((await run('jump')).text).toContain('Usage: /dino')
 })
 
+test('/dino hi takes the best score off the line under the prompt and puts it back', async ($, on) => {
+  mock.store(on)
+
+  // The engine's own drawing of the line, beneath the plugin: the hint, then
+  // the tail the plugin handed it.
+  on('ui.render', { component: 'PromptHint' }, (engine, e) => {
+    const { Text } = engine.ui.resolve(e)
+
+    return Text({ children: `${e.props.hint}${e.props.tail ?? ''}` })
+  })
+  const HINT = {
+    plugin: 'dino',
+    component: 'PromptHint',
+    surface: 'terminal',
+    props: { isDraft: false, isWorking: false, hint: '? for shortcuts' },
+    viewport: { columns: 80, rows: 40 },
+  } as const
+  const drawn = async () => {
+    const line = await $.ui.mount(HINT)
+    const text = (await line.find({ type: 'Text' }))?.text
+    await line.unmount()
+
+    return text
+  }
+
+  const game = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await game.resize(FIELD)
+  await game.key({ key: ' ' })
+  await game.advance(20_000)
+  await game.unmount()
+  expect(await drawn()).toMatch(/^\? for shortcuts +🦖 HI \d{5}$/)
+
+  expect((await $.command.run(said('hi off'))).text).toContain('is off the line')
+  expect(await drawn()).toBe('? for shortcuts')
+
+  // With no word it goes the other way, as `/dino sound` does.
+  expect((await $.command.run(said('hi'))).text).toContain('shows under')
+  expect(await drawn()).toMatch(/HI \d{5}$/)
+  expect((await $.command.run(said('hi maybe'))).text).toContain('Usage: /dino')
+})
+
 test('/dino stop closes the game that /dino play opened', async ($, on) => {
   mock.store(on)
 

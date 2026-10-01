@@ -58,7 +58,7 @@ const ALERTS = {
 // The notices Claude Code sends when it waits on the person's answer.
 const WAITING = ['permission_prompt', 'elicitation_dialog']
 const USAGE =
-  'Usage: /dino [play], /dino stop, /dino mini [on|off], /dino sound [on|off], /dino stats, /dino top, /dino name [<name>|off] or /dino leave.'
+  'Usage: /dino [play], /dino stop, /dino mini [on|off], /dino sound [on|off], /dino hi [on|off], /dino stats, /dino top, /dino name [<name>|off] or /dino leave.'
 const PLAY_WORDS = ['', 'play']
 const STOP_WORDS = ['stop', 'stop-play']
 const SWITCH: Readonly<Record<string, boolean>> = { on: true, off: false }
@@ -82,6 +82,7 @@ const alert = atom({ plugin: 'dino', key: 'alert' } as const, {
 const settings = atom({ plugin: 'dino', key: 'settings' } as const, {
   isMini: false,
   isMuted: false,
+  isHiHidden: false,
 })
 const best = atom({ plugin: 'dino', key: 'best' } as const, 0)
 // The lost run a name is being asked for, to put it on the global top: 0
@@ -116,8 +117,9 @@ const toSettings = (value: unknown): DinoSettings =>
     ? {
         isMini: 'isMini' in value && value.isMini === true,
         isMuted: 'isMuted' in value && value.isMuted === true,
+        isHiHidden: 'isHiHidden' in value && value.isHiHidden === true,
       }
-    : { isMini: false, isMuted: false }
+    : { isMini: false, isMuted: false, isHiHidden: false }
 
 const toPost = (value: unknown): Post =>
   typeof value === 'object' && value !== null
@@ -432,6 +434,21 @@ const soundText = async ($: EngineInterface, word: string): Promise<string> => {
   return `Dino sound is ${isOn ? 'on' : 'off'}.`
 }
 
+/** `/dino hi [on|off]`: the word's way, or the other way with no word. */
+const hiText = async ($: EngineInterface, word: string): Promise<string> => {
+  const isOn = word === '' ? (await read($, settings)).isHiHidden : SWITCH[word]
+
+  if (isOn === undefined) {
+    return USAGE
+  }
+
+  await stored($, { isHiHidden: !isOn })
+
+  return isOn
+    ? 'Your best score shows under the prompt.'
+    : 'Your best score is off the line under the prompt.'
+}
+
 /** Holds the run and says why: Claude is done, or waits on the person. */
 const alerted = async (
   $: EngineInterface,
@@ -495,7 +512,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'dino',
       description: 'Play a T-Rex runner in a pane while Claude works',
-      argumentHint: '[play|stop|mini|sound|stats|top|name|leave]',
+      argumentHint: '[play|stop|mini|sound|hi|stats|top|name|leave]',
     })
     const saved = toSettings(await $.store.get(SETTINGS))
     const hi = toScore(await $.store.get(HI))
@@ -523,6 +540,10 @@ export const register: Register = on => {
 
     if (verb === 'sound') {
       return { text: await soundText($, word) }
+    }
+
+    if (verb === 'hi') {
+      return { text: await hiText($, word) }
     }
 
     if (verb === 'name' && word === 'off') {
@@ -664,8 +685,9 @@ export const register: Register = on => {
   // is the engine's to draw: this only pads a tail out to the row's end.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const hi = await read($, best)
+    const { isHiHidden } = await read($, settings)
 
-    if (hi === 0) {
+    if (hi === 0 || isHiHidden) {
       return next(e)
     }
 

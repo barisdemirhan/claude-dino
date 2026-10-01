@@ -23,8 +23,12 @@ export type DinoFeed = { tools: number; fails: number; tool: string }
  */
 export type DinoAlert = { count: number; reason: 'done' | 'ask' }
 
-/** What the person switched with `/dino mini` and `/dino sound`. */
-export type DinoSettings = { isMini: boolean; isMuted: boolean }
+/** What the person switched with `/dino mini`, `/dino sound` and `/dino hi`. */
+export type DinoSettings = {
+  isMini: boolean
+  isMuted: boolean
+  isHiHidden: boolean
+}
 
 /**
  * The best run the game offers to put on the global top, once its player
