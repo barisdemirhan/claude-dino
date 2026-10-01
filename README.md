@@ -65,7 +65,7 @@ Its hooks, all in `hooks/register.tsx`:
 - `ui.message` acts only on what the mod's own game posts: it counts finished runs, keeps the best score and plays the sounds. Any other message is passed on untouched.
 - `ui.close` notes that the mod's own pane closed, and passes every close on.
 - `tool.call` counts Claude's calls while a run is on, as described above, and passes each call and its result on untouched.
-- `turn.complete` and `classic.PermissionRequest` pause a run that is on and show the toast. Both pass the event on unchanged and decide nothing.
+- `turn.complete` and `classic.Notification` pause a run that is on and show the toast: the first when Claude's turn ends, the second when Claude Code notifies you that it waits on a permission or a question. Both pass the event on unchanged and decide nothing.
 
 The files under `tests/` run only under `claude plugin test`. They mount the pane in the test harness and are never loaded in a session.
 

@@ -30,6 +30,8 @@ const ALERTS = {
   done: 'Claude is done · dino paused',
   ask: 'Claude needs you · dino paused',
 } as const
+// The notices Claude Code sends when it waits on the person's answer.
+const WAITING = ['permission_prompt', 'elicitation_dialog']
 const USAGE =
   'Usage: /dino [play], /dino stop, /dino mini [on|off], /dino sound [on|off] or /dino stats.'
 const PLAY_WORDS = ['', 'play']
@@ -339,8 +341,10 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('classic.PermissionRequest', async ($, e, next) => {
-    if (isRunning) {
+  // Claude Code's own notice that it waits on the person. It is only read:
+  // the notice goes on as it came, and what it asks stays theirs to answer.
+  on('classic.Notification', async ($, e, next) => {
+    if (isRunning && WAITING.includes(e.notification_type)) {
       isRunning = false
       await alerted($, 'ask')
     }
