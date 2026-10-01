@@ -66,13 +66,14 @@ export const register: Register = on => {
       return <Text dimColor>Dino runs in the terminal and the desktop app.</Text>
     }
 
-    const { Box, Client, Input, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Input, Text } = ui
     const hi = toScore(await $.store.get(HI))
     const { jumps, ducks, typed } = await read($, input)
 
     return (
       <Box flexDirection="column">
-        <Client
+        <ui.Client
           key={GAME}
           module="./dino.tsx"
           props={{ hi, jumps, ducks }}

@@ -36,6 +36,15 @@ Birds show up from 150 points, the run speeds up as it goes, and night falls eve
 
 The mod registers one slash command, `/dino`, and draws one pane. It makes no network requests, reads no files, runs no processes, and never touches your prompts or tool calls. The only thing it saves is your best score, in the plugin's own Claude Code store.
 
+Its four hooks, all in `hooks/register.tsx`:
+
+- `session.start` registers the `/dino` command and passes the event on unchanged.
+- `command.run` answers only the `/dino` command, by opening the pane. Other commands never reach it.
+- `ui.render` draws only the mod's own pane.
+- `ui.message` acts only on the score the mod's own game posts, keeping the highest. Any other message is passed on untouched.
+
+The files under `tests/` run only under `claude plugin test`. They mount the pane in the test harness and are never loaded in a session.
+
 ## Develop
 
 ```sh
