@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "dino",
-      "description": "A T-Rex runner in a pane, inspired by Chrome's offline game: /dino, then space to jump and s to duck",
+      "description": "A T-Rex runner in a pane, inspired by Chrome's offline game: /dino, then space to jump, s to duck and p to pause while Claude works",
       "source": "./",
       "category": "fun"
     }

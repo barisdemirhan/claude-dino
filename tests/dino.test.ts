@@ -16,6 +16,13 @@ const PANE = {
 } as const
 const FIELD = { columns: 80, rows: 16 }
 const GAME = { type: 'Text', in: 'game' } as const
+// `/dino stats` as the person types it at the prompt.
+const STATS = {
+  command: 'dino',
+  args: 'stats',
+  origin: { kind: 'composer' },
+  presentation: { isFullscreen: false, columns: 80 },
+} as const
 
 test('a run starts on space, ends on the first cactus and keeps the best score', async ($, on) => {
   mock.store(on)
@@ -94,4 +101,84 @@ test('a space typed into the keys field makes the dino jump, an s brings it down
     expect(await feet()).not.toBe('')
     await ui.unmount()
   }
+})
+
+test('p holds the run where it stands and space runs it on', async ($, on) => {
+  mock.store(on)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    await ui.resize(FIELD)
+    await ui.key({ key: ' ' })
+    await ui.advance(400)
+    await ui.key({ key: 'p' })
+    expect(await ui.find({ ...GAME, text: 'P A U S E D' })).toBeDefined()
+
+    // Long enough for the first cactus to end a run that had kept going.
+    await ui.advance(20_000)
+    expect(await ui.find({ ...GAME, text: 'G A M E' })).toBeUndefined()
+
+    await ui.key({ key: ' ' })
+    expect(await ui.find({ ...GAME, text: 'P A U S E D' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('a finished run is counted in /dino stats', async ($, on) => {
+  mock.store(on)
+
+  const before = await $.command.run(STATS)
+  expect(before.text).toContain('no runs yet')
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.resize(FIELD)
+  await ui.key({ key: ' ' })
+  await ui.advance(20_000)
+  expect(await ui.find({ ...GAME, text: 'G A M E   O V E R' })).toBeDefined()
+  await ui.unmount()
+
+  const after = await $.command.run(STATS)
+  expect(after.text).toContain('1 run ·')
+})
+
+test('/dino mini and /dino sound take on and off, and say what they take', async ($, on) => {
+  mock.store(on)
+
+  const run = (args: string) => $.command.run({ ...STATS, args })
+
+  expect((await run('mini')).text).toContain('Mini dino is on')
+  expect((await run('mini off')).text).toBe('Mini dino is off.')
+  expect((await run('mini on')).text).toContain('Mini dino is on')
+  expect((await run('sound off')).text).toBe('Dino sound is off.')
+  expect((await run('sound')).text).toBe('Dino sound is on.')
+  expect((await run('mini maybe')).text).toContain('Usage: /dino')
+  expect((await run('jump')).text).toContain('Usage: /dino')
+})
+
+test('/dino stop closes the game that /dino play opened', async ($, on) => {
+  mock.store(on)
+
+  const opened: string[] = []
+  const closed: string[] = []
+  on('ui.open', (_$, e) => {
+    opened.push(e.id)
+
+    return { value: { isPlaced: true } }
+  })
+  on('ui.close', (_$, e) => {
+    closed.push(e.id)
+
+    return { value: undefined }
+  })
+
+  expect((await $.command.run({ ...STATS, args: 'play' })).text).toContain(
+    'Dino is open',
+  )
+  expect(opened).toEqual(['dino'])
+  expect(closed).toEqual([])
+
+  expect((await $.command.run({ ...STATS, args: 'stop' })).text).toContain(
+    'Dino is closed',
+  )
+  expect(closed).toEqual(['dino'])
 })

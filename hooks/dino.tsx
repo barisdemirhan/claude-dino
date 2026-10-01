@@ -1,11 +1,33 @@
 import type { ClientModule, ClientSurface } from 'claude-code'
 
-type Props = { hi: number; jumps: number; ducks: number }
+type Props = {
+  hi: number
+  jumps: number
+  ducks: number
+  pauses: number
+  tools: number
+  fails: number
+  tool: string
+  alerts: number
+  alert: 'done' | 'ask'
+}
 type Sprite = readonly string[]
-type Obstacle = { x: number; y: number; kind: 'cactus' | 'bird'; shape: number }
+type Obstacle = {
+  x: number
+  y: number
+  kind: 'cactus' | 'bird' | 'crate'
+  shape: number
+}
 type Cloud = { x: number; y: number }
-type Game = {
-  phase: 'ready' | 'run' | 'over'
+// The counts the props carry that a game has already acted on.
+type Seen = Pick<
+  Props,
+  'jumps' | 'ducks' | 'pauses' | 'tools' | 'fails' | 'alerts'
+>
+type Game = Seen & {
+  phase: 'ready' | 'run' | 'paused' | 'over'
+  // Why the run is paused: the person's key, or Claude asking for them.
+  note: 'key' | 'done' | 'ask'
   ticks: number
   y: number
   vy: number
@@ -14,12 +36,20 @@ type Game = {
   dist: number
   obstacles: Obstacle[]
   gap: number
+  // Pixels run since the last obstacle came in.
+  since: number
+  // Obstacles Claude's tool calls queued: a crate a call, a bird a failure.
+  crates: number
+  birds: number
+  // The tool behind the latest queued obstacle, and the ticks its name shows.
+  label: string
+  labelTicks: number
+  // The round score the tally blinks, and the ticks it still blinks for.
+  milestone: number
+  flash: number
   clouds: Cloud[]
   seed: number
   hi: number
-  // The counts of the hooks module's keyed jumps and ducks already acted on.
-  jumps: number
-  ducks: number
 }
 
 // Cells across are pixels across; every text row holds two pixel rows (▀ ▄ █),
@@ -44,6 +74,15 @@ const NIGHT_EVERY = 700
 const NIGHT_LASTS = 250
 const BIRDS_FROM = 150
 const TRIPLES_FROM = 55
+// The closest two obstacles come, as a share of the pixels run in a second.
+const MIN_GAP = 0.9
+const MAX_QUEUED = 3
+const LABEL_TICKS = 40
+const MILESTONE = 100
+const FLASH_TICKS = 24
+const JUMP_KEYS = [' ', 'space', 'up', 'return', 'w', 'k']
+const DUCK_KEYS = ['down', 's', 'j']
+const PAUSE_KEYS = ['p']
 
 const BODY: Sprite = [
   '       ######',
@@ -107,6 +146,7 @@ const BIRD_DOWN: Sprite = [
   '    ###### ',
   '    ##     ',
 ]
+const CRATE: Sprite = ['#####', '#   #', '# # #', '#   #', '#####']
 const CLOUD: Sprite = ['    ####    ', '  ##    ### ', '############']
 
 const widthOf = (sprite: Sprite): number =>
@@ -134,16 +174,17 @@ const CACTI: readonly Sprite[] = [
 ]
 // Over a jump, under a jump or a duck, over a standing dino.
 const BIRD_HEIGHTS = [1, 7, 13] as const
+const PAUSE_NOTES = {
+  key: ' space or p to run on ',
+  done: ' Claude is done · space to run on ',
+  ask: ' Claude needs you · space to run on ',
+} as const
 
 const scoreOf = (game: Game): number => Math.floor(game.dist / PIXELS_PER_POINT)
 
-const fresh = (
-  hi: number,
-  seed: number,
-  jumps: number,
-  ducks: number,
-): Game => ({
+const fresh = (hi: number, seed: number, seen: Seen): Game => ({
   phase: 'ready',
+  note: 'key',
   ticks: 0,
   y: 0,
   vy: 0,
@@ -152,11 +193,22 @@ const fresh = (
   dist: 0,
   obstacles: [],
   gap: 50,
+  since: 0,
+  crates: 0,
+  birds: 0,
+  label: '',
+  labelTicks: 0,
+  milestone: 0,
+  flash: 0,
   clouds: [{ x: 34, y: 20 }],
   seed,
   hi,
-  jumps,
-  ducks,
+  jumps: seen.jumps,
+  ducks: seen.ducks,
+  pauses: seen.pauses,
+  tools: seen.tools,
+  fails: seen.fails,
+  alerts: seen.alerts,
 })
 
 /** Advances the game's seed and answers a number in [0, 1). */
@@ -183,6 +235,10 @@ const dinoSprite = (game: Game): Sprite => {
 const obstacleSprite = (obstacle: Obstacle, ticks: number): Sprite => {
   if (obstacle.kind === 'cactus') {
     return CACTI[obstacle.shape] ?? SMALL
+  }
+
+  if (obstacle.kind === 'crate') {
+    return CRATE
   }
 
   return Math.floor(ticks / 6) % 2 === 0 ? BIRD_UP : BIRD_DOWN
@@ -214,7 +270,15 @@ const spawn = (game: Game, columns: number): void => {
   const x = Math.max(columns, MIN_COLUMNS)
   const isBird = scoreOf(game) >= BIRDS_FROM && roll(game) < 0.25
 
-  if (isBird) {
+  if (game.birds > 0) {
+    // A failed call's bird flies low: over a jump, or under a jump or a duck.
+    const y = BIRD_HEIGHTS[Math.floor(roll(game) * 2)] ?? 1
+    game.obstacles.push({ x, y, kind: 'bird', shape: 0 })
+    game.birds -= 1
+  } else if (game.crates > 0) {
+    game.obstacles.push({ x, y: 0, kind: 'crate', shape: 0 })
+    game.crates -= 1
+  } else if (isBird) {
     const y = BIRD_HEIGHTS[Math.floor(roll(game) * BIRD_HEIGHTS.length)] ?? 1
     game.obstacles.push({ x, y, kind: 'bird', shape: 0 })
   } else {
@@ -227,7 +291,8 @@ const spawn = (game: Game, columns: number): void => {
     })
   }
 
-  game.gap = Math.round(game.speed * (0.9 + roll(game) * 1.1))
+  game.since = 0
+  game.gap = Math.round(game.speed * (MIN_GAP + roll(game) * 1.1))
 }
 
 const step = (previous: Game, columns: number): Game => {
@@ -254,6 +319,19 @@ const step = (previous: Game, columns: number): Game => {
   game.speed = Math.min(MAX_SPEED, game.speed + ACCELERATION * DT)
   game.dist += moved
   game.gap -= moved
+  game.since += moved
+  game.labelTicks = Math.max(0, game.labelTicks - 1)
+  game.flash = Math.max(0, game.flash - 1)
+
+  const score = scoreOf(game)
+  const isRound =
+    Math.floor(score / MILESTONE) > Math.floor(scoreOf(previous) / MILESTONE)
+
+  if (isRound) {
+    game.milestone = score - (score % MILESTONE)
+    game.flash = FLASH_TICKS
+  }
+
   game.obstacles = previous.obstacles
     .map(obstacle => ({ ...obstacle, x: obstacle.x - moved }))
     .filter(obstacle => obstacle.x > -24)
@@ -261,7 +339,10 @@ const step = (previous: Game, columns: number): Game => {
     .map(cloud => ({ ...cloud, x: cloud.x - moved / 5 }))
     .filter(cloud => cloud.x > -widthOf(CLOUD))
 
-  if (game.gap <= 0) {
+  const isQueued =
+    game.crates + game.birds > 0 && game.since >= game.speed * MIN_GAP
+
+  if (game.gap <= 0 || isQueued) {
     spawn(game, columns)
   }
 
@@ -278,17 +359,23 @@ const step = (previous: Game, columns: number): Game => {
   return game
 }
 
+const paused = (game: Game, note: Game['note']): Game =>
+  game.phase === 'run' ? { ...game, phase: 'paused', note } : game
+
+const toggled = (game: Game): Game =>
+  game.phase === 'paused' ? { ...game, phase: 'run' } : paused(game, 'key')
+
 const jumped = (game: Game): Game => {
   const isWaiting =
     game.phase === 'ready' ||
     (game.phase === 'over' && game.ticks >= RESTART_TICKS)
 
   if (isWaiting) {
-    return {
-      ...fresh(game.hi, game.seed, game.jumps, game.ducks),
-      phase: 'run',
-      vy: JUMP,
-    }
+    return { ...fresh(game.hi, game.seed, game), phase: 'run', vy: JUMP }
+  }
+
+  if (game.phase === 'paused') {
+    return { ...game, phase: 'run' }
   }
 
   if (game.phase === 'run' && game.y === 0) {
@@ -310,23 +397,91 @@ const ducked = (game: Game): Game => {
   }
 }
 
-/** The game after the jumps and ducks the props count beyond the ones seen. */
-const caughtUp = (game: Game, props: Props): Game => {
-  const seen = { ...game, jumps: props.jumps, ducks: props.ducks }
+/** The run with the obstacles Claude's new tool calls and failures queue. */
+const fed = (game: Game, props: Props): Game => {
+  const seen = { ...game, tools: props.tools, fails: props.fails }
 
-  if (props.jumps !== game.jumps) {
-    return jumped(seen)
+  if (game.phase !== 'run') {
+    return seen
   }
 
-  return props.ducks !== game.ducks ? ducked(seen) : game
+  return {
+    ...seen,
+    crates: Math.min(MAX_QUEUED, game.crates + props.tools - game.tools),
+    birds: Math.min(MAX_QUEUED, game.birds + props.fails - game.fails),
+    label: props.tool,
+    labelTicks: LABEL_TICKS,
+  }
+}
+
+/** The game after every count the props carry beyond the ones seen. */
+const caughtUp = (game: Game, props: Props): Game => {
+  const moves: readonly [boolean, (now: Game) => Game][] = [
+    [
+      props.alerts !== game.alerts,
+      now => paused({ ...now, alerts: props.alerts }, props.alert),
+    ],
+    [
+      props.tools !== game.tools || props.fails !== game.fails,
+      now => fed(now, props),
+    ],
+    [
+      props.pauses !== game.pauses,
+      now => toggled({ ...now, pauses: props.pauses }),
+    ],
+    [
+      props.jumps !== game.jumps,
+      now => jumped({ ...now, jumps: props.jumps }),
+    ],
+    [
+      props.ducks !== game.ducks,
+      now => ducked({ ...now, ducks: props.ducks }),
+    ],
+  ]
+
+  return moves.reduce((now, [isDue, move]) => (isDue ? move(now) : now), game)
+}
+
+/** What the hooks module hears of a change, to keep scores and play sounds. */
+const eventOf = (before: Game, after: Game): string | undefined => {
+  if (before.phase !== after.phase) {
+    if (after.phase === 'run') {
+      return before.phase === 'paused' ? 'resume' : 'start'
+    }
+
+    return after.phase === 'ready' ? undefined : after.phase
+  }
+
+  if (after.phase !== 'run') {
+    return undefined
+  }
+
+  if (after.flash > before.flash) {
+    return 'point'
+  }
+
+  return after.vy === JUMP && before.vy !== JUMP ? 'jump' : undefined
+}
+
+const settle = (
+  surface: ClientSurface<Game>,
+  before: Game,
+  after: Game,
+): void => {
+  const event = eventOf(before, after)
+  surface.setState(after)
+
+  if (event !== undefined) {
+    surface.post({ event, score: scoreOf(after) })
+  }
 }
 
 const act = (surface: ClientSurface<Game>, move: (game: Game) => Game): void => {
   const game = surface.state
   const next = game === undefined ? undefined : move(game)
 
-  if (next !== undefined && next !== game) {
-    surface.setState(next)
+  if (game !== undefined && next !== undefined && next !== game) {
+    settle(surface, game, next)
   }
 }
 
@@ -340,28 +495,20 @@ const tick = (surface: ClientSurface<Game>): void => {
     return
   }
 
-  const next = step(game, Math.min(surface.columns, MAX_COLUMNS))
-  surface.setState(next)
-
-  if (game.phase === 'run' && next.phase === 'over' && next.hi > game.hi) {
-    surface.post({ score: next.hi })
-  }
+  settle(surface, game, step(game, Math.min(surface.columns, MAX_COLUMNS)))
 }
 
 const start = (surface: ClientSurface<Game>, props: Props): Game => {
-  const game = fresh(
-    props.hi,
-    Math.floor(Math.random() * 2 ** 32),
-    props.jumps,
-    props.ducks,
-  )
+  const game = fresh(props.hi, Math.floor(Math.random() * 2 ** 32), props)
   surface.setState(game)
   surface.every(TICK_MS, () => tick(surface))
   surface.onKey(event => {
-    if ([' ', 'space', 'up', 'return', 'w', 'k'].includes(event.key)) {
+    if (JUMP_KEYS.includes(event.key)) {
       act(surface, jumped)
-    } else if (['down', 's', 'j'].includes(event.key)) {
+    } else if (DUCK_KEYS.includes(event.key)) {
       act(surface, ducked)
+    } else if (PAUSE_KEYS.includes(event.key)) {
+      act(surface, toggled)
     }
   })
   surface.onPointer(event => {
@@ -435,7 +582,7 @@ const Dino: ClientModule<Props, Game> = (props, surface) => {
   const game = caughtUp(known, props)
 
   if (game !== known) {
-    surface.setState(game)
+    settle(surface, known, game)
   }
 
   const columns = Math.min(surface.columns, MAX_COLUMNS)
@@ -463,13 +610,24 @@ const Dino: ClientModule<Props, Game> = (props, surface) => {
   })
   const score = scoreOf(game)
   const hi = Math.max(props.hi, game.hi)
-  const tally = `${hi > 0 ? `HI ${digits(hi)}  ` : ''}${digits(score)} `
+  // A round score stays up and blinks, as the arcade's does.
+  const isBlinking = game.flash > 0 && game.phase === 'run'
+  const isDark = isBlinking && Math.floor(game.flash / 4) % 2 === 0
+  const shown = isDark ? '     ' : digits(isBlinking ? game.milestone : score)
+  const tally = `${hi > 0 ? `HI ${digits(hi)}  ` : ''}${shown} `
   const middle = Math.max(1, Math.floor(rows / 2) - 3)
 
   lines[0] = stamp(lines[0] ?? '', tally, columns - tally.length)
 
+  if (game.labelTicks > 0 && game.label !== '') {
+    lines[0] = stamp(lines[0] ?? '', ` ▸ ${game.label} `, 0)
+  }
+
   if (game.phase === 'ready') {
     lines[middle] = centered(lines[middle] ?? '', ' PRESS SPACE TO PLAY ')
+  } else if (game.phase === 'paused') {
+    lines[middle] = centered(lines[middle] ?? '', ' P A U S E D ')
+    lines[middle + 2] = centered(lines[middle + 2] ?? '', PAUSE_NOTES[game.note])
   } else if (game.phase === 'over') {
     lines[middle] = centered(lines[middle] ?? '', ' G A M E   O V E R ')
     lines[middle + 2] = centered(lines[middle + 2] ?? '', ' space to run again ')
