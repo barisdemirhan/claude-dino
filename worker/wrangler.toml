@@ -7,3 +7,15 @@ binding = "DB"
 database_name = "claude-dino-board"
 database_id = "2f8c170e-ff1a-46a4-9494-4a855621ae7c"
 migrations_dir = "migrations"
+
+# How often one address may write and read in a minute, counted at the edge
+# with no database behind it: a flood is turned away before it costs a query.
+[[ratelimits]]
+name = "WRITES"
+namespace_id = "4101"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "READS"
+namespace_id = "4102"
+simple = { limit = 60, period = 60 }

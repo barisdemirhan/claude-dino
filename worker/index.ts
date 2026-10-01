@@ -5,7 +5,12 @@
 import { RULES, replayed } from '../hooks/sim'
 import type { Lead } from '../hooks/sim'
 
-type Env = { DB: D1Database; ADMIN_TOKEN?: string }
+type Env = {
+  DB: D1Database
+  ADMIN_TOKEN?: string
+  WRITES: RateLimit
+  READS: RateLimit
+}
 type Player = {
   id: string
   key_hash: string
@@ -115,20 +120,35 @@ const known = async (env: Env, body: Body): Promise<Player | Response> => {
   return player.banned === 0 ? player : refusal('banned', 403)
 }
 
-/** Counts a write against its address; true once the address wrote too much. */
+const addressOf = (request: Request): string =>
+  request.headers.get('CF-Connecting-IP') ?? ''
+
+/**
+ * Counts a write against its address in the database, over a longer stretch
+ * than the edge counts, which lets a good share of a flood through: true
+ * once the address wrote too much. A write refused here is not counted, so
+ * a flood reads the database and never writes to it.
+ */
 const isFlooding = async (env: Env, request: Request): Promise<boolean> => {
-  const address = request.headers.get('CF-Connecting-IP') ?? ''
+  const address = addressOf(request)
   const ip = await digestOf(`${env.ADMIN_TOKEN ?? ''}:${address}`)
   const at = now()
-  const [, , recent] = await env.DB.batch<{ hits: number }>([
+  const [, recent] = await env.DB.batch<{ hits: number }>([
     env.DB.prepare('DELETE FROM hits WHERE at < ?1').bind(at - HITS_KEPT),
-    env.DB.prepare('INSERT INTO hits (ip, at) VALUES (?1, ?2)').bind(ip, at),
     env.DB.prepare(
       'SELECT count(*) AS hits FROM hits WHERE ip = ?1 AND at > ?2',
     ).bind(ip, at - HITS_WINDOW),
   ])
 
-  return (recent?.results[0]?.hits ?? 0) > HITS
+  if ((recent?.results[0]?.hits ?? 0) >= HITS) {
+    return true
+  }
+
+  await env.DB.prepare('INSERT INTO hits (ip, at) VALUES (?1, ?2)')
+    .bind(ip, at)
+    .run()
+
+  return false
 }
 
 /** `POST /players`: takes a name, or changes the one a player has. */
@@ -377,8 +397,12 @@ const routed = async (request: Request, env: Env): Promise<Response> => {
     return kept(env, request, url.pathname)
   }
 
+  const key = addressOf(request)
+
   if (request.method === 'GET' && url.pathname === '/top') {
-    return top(env, url.searchParams.get('id') ?? '')
+    return (await env.READS.limit({ key })).success
+      ? top(env, url.searchParams.get('id') ?? '')
+      : refusal('slow-down', 429)
   }
 
   const write = request.method === 'POST' ? WRITES[url.pathname] : undefined
@@ -387,7 +411,7 @@ const routed = async (request: Request, env: Env): Promise<Response> => {
     return refusal('not-found', 404)
   }
 
-  if (await isFlooding(env, request)) {
+  if (!(await env.WRITES.limit({ key })).success || (await isFlooding(env, request))) {
     return refusal('slow-down', 429)
   }
 
