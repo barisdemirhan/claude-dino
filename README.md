@@ -4,6 +4,8 @@ A T-Rex runner you can play in a pane inside [Claude Code](https://claude.com/cl
 
 Type `/dino`, press space, and jump the cacti while Claude works.
 
+<img src="docs/dino.png" width="604" alt="Dino's pane: the dino in the air over a crate a Bash call sent, a bird and two clouds ahead, the best score and the score at the top right">
+
 ## Install
 
 ```sh
