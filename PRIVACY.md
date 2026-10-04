@@ -1,10 +1,10 @@
 # Privacy
 
-What the Dino mod for Claude Code does with data. Last changed on 2 October 2026.
+What the Dino mod for Claude Code does with data. Last changed on 4 October 2026.
 
 ## If you never use the global top
 
-Nothing leaves your machine. The game keeps your best score, how many runs and points you have in all, and your two settings (sound and mini) in the plugin's own Claude Code store, on your disk.
+Nothing leaves your machine. The game keeps your best score, how many runs and points you have in all, and your settings (sound, mini, whether your best score shows under the prompt and whether `/dino close` put it all away) in the plugin's own Claude Code store, on your disk.
 
 While a run is on, the mod reads the name of each tool Claude calls and whether the call failed, to send obstacles your way. It reads nothing of a call's arguments or output, and keeps neither fact past the session.
 

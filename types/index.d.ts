@@ -28,6 +28,11 @@ export type DinoSettings = {
   isMini: boolean
   isMuted: boolean
   isHiHidden: boolean
+  /**
+   * True after `/dino close`: the mini dino, the best score under the prompt
+   * and the sounds are all away, whatever the three above say.
+   */
+  isClosed: boolean
 }
 
 /**

@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { replayed } from '../hooks/sim'
 
@@ -29,6 +30,37 @@ const STATS = {
 // `/dino name ...`, `/dino top` and `/dino leave`, the same way.
 const said = (args: string) => ({ ...STATS, args })
 const OFFER = { type: 'Text', text: /enter sends this name/ } as const
+const SESSION = { cwd: '/', surface: 'terminal', isInteractive: true } as const
+// The line under the prompt, and the band above it while Claude works.
+const HINT_LINE = {
+  plugin: 'dino',
+  component: 'PromptHint',
+  surface: 'terminal',
+  props: { isDraft: false, isWorking: false, hint: '? for shortcuts' },
+  viewport: { columns: 80, rows: 40 },
+} as const
+const BAND = {
+  plugin: 'dino',
+  component: 'AbovePrompt',
+  surface: 'terminal',
+  props: {
+    hasSurvey: false,
+    isWorking: true,
+    maxRows: 20,
+    bodyColumns: 80,
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+  viewport: { columns: 80, rows: 40 },
+} as const
+// Claude's turn, as it ends.
+const DONE = {
+  answer: '',
+  durationMs: 1,
+  isAborted: false,
+  turnId: 'turn',
+  reason: 'answer',
+} as const
 
 /**
  * The leaderboard's server, answered from memory: each path's status and
@@ -56,6 +88,83 @@ const board = (
   })
 
   return asked
+}
+
+/**
+ * A session over a clock and a store in memory, the store one another session
+ * could write to. Answers both, and what was played, closed and toasted; the
+ * engine draws the line under the prompt and the band above it beneath the
+ * plugin, as it does with no mod.
+ */
+const world = (on: On, kept: Readonly<Record<string, unknown>> = {}) => {
+  const clock = mock.clock(on)
+  const store = new Map(Object.entries(kept))
+  const plays: unknown[] = []
+  const closed: string[] = []
+  const toasts: string[] = []
+  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    store.set(e.key, e.value)
+
+    return { value: undefined }
+  })
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('turn.complete', () => ({ text: '' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.close', (_$, e) => {
+    closed.push(e.id)
+
+    return { value: undefined }
+  })
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  on('audio.play', (_$, e) => {
+    plays.push(e.clip)
+
+    return { value: undefined }
+  })
+  on('ui.render', { component: 'PromptHint' }, (engine, e) =>
+    engine.ui
+      .resolve(e)
+      .Text({ children: `${e.props.hint}${e.props.tail ?? ''}` }),
+  )
+  on('ui.render', { component: 'AbovePrompt' }, (engine, e) =>
+    engine.ui.resolve(e).Text({ children: 'nothing here' }),
+  )
+
+  return { clock, store, plays, closed, toasts }
+}
+
+/**
+ * What shows of the dino with its pane closed: the mini dino, and the best
+ * score under the prompt.
+ */
+const seen = async ($: Engine) => {
+  const band = await $.ui.mount(BAND)
+  const line = await $.ui.mount(HINT_LINE)
+  const isMini =
+    (await band.find({ type: 'Text', text: 'nothing here' })) === undefined
+  const isHi = /HI \d{5}$/.test((await line.find({ type: 'Text' }))?.text ?? '')
+  await band.unmount()
+  await line.unmount()
+
+  return { isMini, isHi }
+}
+
+/** Whether a run started in the game sounds. */
+const isHeard = async ($: Engine, plays: unknown[]): Promise<boolean> => {
+  const before = plays.length
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.resize(FIELD)
+  await ui.key({ key: ' ' })
+  await ui.advance(100)
+  await ui.unmount()
+
+  return plays.length > before
 }
 
 test('a run starts on space, ends on the first cactus and keeps the best score', async ($, on) => {
@@ -253,8 +362,77 @@ test('/dino stop closes the game that /dino play opened', async ($, on) => {
   expect(closed).toEqual([])
 
   expect((await $.command.run({ ...STATS, args: 'stop' })).text).toContain(
-    'Dino is closed',
+    'The game is closed',
   )
+  expect(closed).toEqual(['dino'])
+})
+
+test('/dino close takes the game, the mini dino, the best score and the sounds away, and /dino brings them back', async ($, on) => {
+  const { store, plays, closed } = world(on, { hi: 1234 })
+  await $.session.start(SESSION)
+  await $.command.run(said('mini'))
+  expect(await seen($)).toEqual({ isMini: true, isHi: true })
+  expect(await isHeard($, plays)).toBe(true)
+
+  expect((await $.command.run(said('close'))).text).toBe(
+    'Dino is closed: the game, the mini dino, your best score under the prompt and the sounds are away. /dino brings them back.',
+  )
+  expect(closed).toEqual(['dino'])
+  expect(await seen($)).toEqual({ isMini: false, isHi: false })
+  expect(await isHeard($, plays)).toBe(false)
+  // What the game keeps stays as it was.
+  expect((await $.command.run(said('stats'))).text).toContain('best 01234')
+  expect(store.get('hi')).toBe(1234)
+  expect((await $.command.run(said('exit'))).text).toContain('Dino is closed')
+  expect((await $.command.run(said('quit'))).text).toContain('Dino is closed')
+  expect((await $.command.run(said('close now'))).text).toContain('Usage: /dino')
+
+  // The game brings the rest back as the person kept it.
+  expect((await $.command.run(said(''))).text).toContain('Dino is open')
+  expect(await seen($)).toEqual({ isMini: true, isHi: true })
+  expect(await isHeard($, plays)).toBe(true)
+
+  // Closed, /dino hi brings the best score back on its own: the mini dino and
+  // the sound the person turned off stay off.
+  await $.command.run(said('mini off'))
+  await $.command.run(said('sound off'))
+  await $.command.run(said('close'))
+  expect((await $.command.run(said('hi'))).text).toContain('shows under')
+  expect(await seen($)).toEqual({ isMini: false, isHi: true })
+  expect(await isHeard($, plays)).toBe(false)
+})
+
+test('/dino close, mini, hi and sound in another session reach this one at its next look', async ($, on) => {
+  const { clock, store, plays, closed, toasts } = world(on, {
+    hi: 1234,
+    settings: { isMini: true },
+  })
+  // Another session writes to the store this one reads.
+  const elsewhere = (change: object) =>
+    store.set('settings', { ...Object(store.get('settings')), ...change })
+  await $.session.start(SESSION)
+  expect(await seen($)).toEqual({ isMini: true, isHi: true })
+  // A run is on here when the other session closes it all.
+  expect(await isHeard($, plays)).toBe(true)
+
+  elsewhere({ isClosed: true })
+  await clock.advance(2000)
+  expect(await seen($)).toEqual({ isMini: false, isHi: false })
+  expect(closed).toEqual(['dino'])
+  // The run went with the game: Claude's turn ending holds nothing.
+  await $.turn.complete(DONE)
+  expect(toasts).toEqual([])
+  expect(await isHeard($, plays)).toBe(false)
+
+  elsewhere({ isClosed: false })
+  await clock.advance(2000)
+  expect(await seen($)).toEqual({ isMini: true, isHi: true })
+  expect(await isHeard($, plays)).toBe(true)
+
+  elsewhere({ isMini: false, isHiHidden: true, isMuted: true })
+  await clock.advance(2000)
+  expect(await seen($)).toEqual({ isMini: false, isHi: false })
+  expect(await isHeard($, plays)).toBe(false)
   expect(closed).toEqual(['dino'])
 })
 

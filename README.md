@@ -33,8 +33,9 @@ Birds show up from 150 points, the run speeds up as it goes, and night falls eve
 | Command | What it does |
 | --- | --- |
 | `/dino` or `/dino play` | Opens the game |
-| `/dino stop` | Closes the game |
-| `/dino mini` | Turns the mini dino on: a small one that plays itself above the prompt while Claude works, hopping the cacti and ducking the birds under the clouds. `/dino mini off` turns it off |
+| `/dino stop` | Closes the game. The mini dino and your best score under the prompt stay |
+| `/dino close` | Takes it all away, in every open session within two seconds: the game, the mini dino, your best score under the prompt and the sounds. `/dino exit` and `/dino quit` do the same. Your runs, best and settings are kept, and `/dino` brings it all back as it was |
+| `/dino mini` | Turns the mini dino on: a small one that plays itself above the prompt while Claude works, hopping the cacti and ducking the birds under the clouds. `/dino mini off` turns it off. Every open session follows within two seconds, as it does for `/dino sound` and `/dino hi` |
 | `/dino sound` | Turns the sounds off or on. `/dino sound on` and `/dino sound off` say which |
 | `/dino hi` | Takes your best score off the line under the prompt, or puts it back. `/dino hi on` and `/dino hi off` say which |
 | `/dino stats` | Your runs so far, your best and your average |
@@ -87,13 +88,13 @@ The same as a privacy policy: [PRIVACY.md](PRIVACY.md).
 
 While a run is on, it reads two things of each tool call Claude makes: the tool's name, to show it in the game, and whether the call failed. It reads nothing of the call's arguments or output, and keeps neither fact past the session.
 
-It saves four things in the plugin's own Claude Code store: your best score, how many runs and points you have in all, your three settings (sound, mini and whether your best score shows under the prompt) and, once you join the global top, your name, id and secret there.
+It saves four things in the plugin's own Claude Code store: your best score, how many runs and points you have in all, your settings (sound, mini, whether your best score shows under the prompt and whether `/dino close` put it all away) and, once you join the global top, your name, id and secret there.
 
 It plays three short sounds from its own `sounds/` folder, through Claude Code's player.
 
 Its hooks, all in `hooks/register.tsx`:
 
-- `session.start` registers the `/dino` command and loads your settings and best score, then passes the event on unchanged.
+- `session.start` registers the `/dino` command and loads your settings and best score, then passes the event on unchanged. From then on the session reads your settings from the store every two seconds, to follow what another open session switched.
 - `command.run` answers only the `/dino` command. Other commands never reach it.
 - `ui.render` draws only the mod's own pane, and the mini band while it is on and Claude is working. It also adds your best score after the hint line under the prompt, leaving the hint itself as it is.
 - `ui.message` acts only on what the mod's own game posts: it counts finished runs, keeps the best score, plays the sounds and, if you are on the global top, sends a run that beats your best there. Any other message is passed on untouched.

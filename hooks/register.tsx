@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { DinoAlert, DinoBoard, DinoInput, DinoSettings } from '../types'
 import {
@@ -35,6 +35,8 @@ const SETTINGS = 'settings'
 const PLAYER = 'player'
 const ROWS = 16
 const MINI_ROWS = 4
+// Every session looks this often at what another may have switched.
+const TICK_MS = 2000
 // Cells kept clear after the best score: the hint line draws marks its text
 // does not count, and a tail that overruns the row is cut.
 const HINT_MARGIN = 6
@@ -58,9 +60,12 @@ const ALERTS = {
 // The notices Claude Code sends when it waits on the person's answer.
 const WAITING = ['permission_prompt', 'elicitation_dialog']
 const USAGE =
-  'Usage: /dino [play], /dino stop, /dino mini [on|off], /dino sound [on|off], /dino hi [on|off], /dino stats, /dino top, /dino name [<name>|off] or /dino leave.'
+  'Usage: /dino [play], /dino stop, /dino close, /dino mini [on|off], /dino sound [on|off], /dino hi [on|off], /dino stats, /dino top, /dino name [<name>|off] or /dino leave.'
 const PLAY_WORDS = ['', 'play']
 const STOP_WORDS = ['stop', 'stop-play']
+// Other words for closing it all: the game, the mini dino, the best score
+// under the prompt and the sounds.
+const CLOSE_WORDS = ['close', 'exit', 'quit']
 const SWITCH: Readonly<Record<string, boolean>> = { on: true, off: false }
 
 const input = atom({ plugin: 'dino', key: 'input' } as const, {
@@ -83,6 +88,7 @@ const settings = atom({ plugin: 'dino', key: 'settings' } as const, {
   isMini: false,
   isMuted: false,
   isHiHidden: false,
+  isClosed: false,
 })
 const best = atom({ plugin: 'dino', key: 'best' } as const, 0)
 // The lost run a name is being asked for, to put it on the global top: 0
@@ -118,8 +124,9 @@ const toSettings = (value: unknown): DinoSettings =>
         isMini: 'isMini' in value && value.isMini === true,
         isMuted: 'isMuted' in value && value.isMuted === true,
         isHiHidden: 'isHiHidden' in value && value.isHiHidden === true,
+        isClosed: 'isClosed' in value && value.isClosed === true,
       }
-    : { isMini: false, isMuted: false, isHiHidden: false }
+    : { isMini: false, isMuted: false, isHiHidden: false, isClosed: false }
 
 const toPost = (value: unknown): Post =>
   typeof value === 'object' && value !== null
@@ -371,9 +378,9 @@ const join = async (
 
 const play = async ($: EngineInterface, event: string): Promise<void> => {
   const asset = CLIPS[event]
-  const { isMuted } = await read($, settings)
+  const { isMuted, isClosed } = await read($, settings)
 
-  if (asset !== undefined && !isMuted) {
+  if (asset !== undefined && !isMuted && !isClosed) {
     // A machine with no player has no sound; the game runs on without it.
     await $.audio.play({ asset }, { gain: 0.5 }).catch(() => undefined)
   }
@@ -395,16 +402,64 @@ const statsText = async ($: EngineInterface): Promise<string> => {
   return `Dino: ${counted} · best ${digits(hi)} · average ${average} · ${points} points in all`
 }
 
-/** Changes a setting for this session and keeps it for the next ones. */
+/**
+ * Changes a setting for this session and keeps it for the next ones, and for
+ * the others open now, which take it up at their next look.
+ */
 const stored = async (
   $: EngineInterface,
   change: Partial<DinoSettings>,
 ): Promise<DinoSettings> => {
-  const next = await update($, settings, now => ({ ...now, ...change }))
+  // Closed is every part of the dino away together: a change that shows one
+  // of them again leaves it closed no longer.
+  const changed =
+    change.isClosed === undefined &&
+    (change.isMini === true || change.isHiHidden === false)
+      ? { ...change, isClosed: false }
+      : change
+  // Another session may have switched the rest since this one last looked.
+  const next = { ...toSettings(await $.store.get(SETTINGS)), ...changed }
+  await update($, settings, () => next)
   await $.store.set(SETTINGS, next)
 
   return next
 }
+
+/**
+ * Takes up what another session switched. The settings are one for every
+ * session, kept in the store, and a `/dino close` taken up from there closes
+ * the game here too. Answers whether it did.
+ */
+const synced = async ($: EngineInterface): Promise<boolean> => {
+  const shared = toSettings(await $.store.get(SETTINGS))
+  const held = await read($, settings)
+  const isHeld =
+    held.isMini === shared.isMini &&
+    held.isMuted === shared.isMuted &&
+    held.isHiHidden === shared.isHiHidden &&
+    held.isClosed === shared.isClosed
+
+  if (isHeld) {
+    return false
+  }
+
+  await update($, settings, () => shared)
+
+  if (!shared.isClosed || held.isClosed) {
+    return false
+  }
+
+  await $.ui.close({ id: PANE })
+
+  return true
+}
+
+/** True while the mini dino is on, and not closed with the rest. */
+const isMiniShown = (now: DinoSettings): boolean => now.isMini && !now.isClosed
+
+/** True while the best score shows under the prompt: kept, and not closed. */
+const isHiShown = (now: DinoSettings): boolean =>
+  !now.isHiHidden && !now.isClosed
 
 /** `/dino mini [on|off]`: the mini dino on, unless the word says off. */
 const miniText = async ($: EngineInterface, word: string): Promise<string> => {
@@ -436,7 +491,7 @@ const soundText = async ($: EngineInterface, word: string): Promise<string> => {
 
 /** `/dino hi [on|off]`: the word's way, or the other way with no word. */
 const hiText = async ($: EngineInterface, word: string): Promise<string> => {
-  const isOn = word === '' ? (await read($, settings)).isHiHidden : SWITCH[word]
+  const isOn = word === '' ? !isHiShown(await read($, settings)) : SWITCH[word]
 
   if (isOn === undefined) {
     return USAGE
@@ -447,6 +502,19 @@ const hiText = async ($: EngineInterface, word: string): Promise<string> => {
   return isOn
     ? 'Your best score shows under the prompt.'
     : 'Your best score is off the line under the prompt.'
+}
+
+/**
+ * `/dino close`: the game, the mini dino and the best score under the prompt
+ * away together, and so the sounds, where `/dino stop` closes only the game.
+ * `/dino` brings them back as they were; the other sessions follow at their
+ * next look at the store.
+ */
+const closedText = async ($: EngineInterface): Promise<string> => {
+  await $.ui.close({ id: PANE })
+  await stored($, { isClosed: true })
+
+  return 'Dino is closed: the game, the mini dino, your best score under the prompt and the sounds are away. /dino brings them back.'
 }
 
 /** Holds the run and says why: Claude is done, or waits on the person. */
@@ -507,12 +575,14 @@ export const register: Register = on => {
   let isRunning = false
   // The latest finished run, kept for a name that comes after it.
   let latest: Run | undefined
+  // The look at the store for what another session switched.
+  let ticker: Timer | undefined
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'dino',
       description: 'Play a T-Rex runner in a pane while Claude works',
-      argumentHint: '[play|stop|mini|sound|hi|stats|top|name|leave]',
+      argumentHint: '[play|stop|close|mini|sound|hi|stats|top|name|leave]',
     })
     const saved = toSettings(await $.store.get(SETTINGS))
     const hi = toScore(await $.store.get(HI))
@@ -520,6 +590,12 @@ export const register: Register = on => {
     await update($, settings, () => saved)
     await update($, best, () => hi)
     await update($, standing, () => ({ name, rank }))
+    // A close another session made ends a run here, as one made here does.
+    ticker ??= $.clock.every(TICK_MS, async () => {
+      if (await synced($)) {
+        isRunning = false
+      }
+    })
 
     return next(e)
   })
@@ -589,12 +665,23 @@ export const register: Register = on => {
       isRunning = false
       await $.ui.close({ id: PANE })
 
-      return { text: 'Dino is closed. /dino opens it again.' }
+      return {
+        text: 'The game is closed. /dino opens it again, and /dino close takes the mini dino and your best score away too.',
+      }
+    }
+
+    if (CLOSE_WORDS.includes(verb)) {
+      isRunning = false
+
+      return { text: await closedText($) }
     }
 
     if (!PLAY_WORDS.includes(verb)) {
       return { text: USAGE }
     }
+
+    // The game brings back what `/dino close` took away, as it was.
+    await stored($, { isClosed: false })
 
     const opened = await $.ui.open({
       id: PANE,
@@ -685,9 +772,8 @@ export const register: Register = on => {
   // is the engine's to draw: this only pads a tail out to the row's end.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const hi = await read($, best)
-    const { isHiHidden } = await read($, settings)
 
-    if (hi === 0 || isHiHidden) {
+    if (hi === 0 || !isHiShown(await read($, settings))) {
       return next(e)
     }
 
@@ -706,7 +792,7 @@ export const register: Register = on => {
       !e.props.hasSurvey &&
       (e.surface === 'terminal' || e.surface === 'desktop')
 
-    if (!isOffered || !(await read($, settings)).isMini) {
+    if (!isOffered || !isMiniShown(await read($, settings))) {
       return next(e)
     }
 
